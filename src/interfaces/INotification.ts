@@ -1,4 +1,4 @@
-export type NotificationType =
+﻿export type NotificationType =
   | 'proposal_received'
   | 'proposal_accepted'
   | 'proposal_rejected'
@@ -18,7 +18,9 @@ export type NotificationType =
   | 'receipt_confirmed'
   | 'new_order'
   | 'subscription_active'
-  | 'addon_purchased';
+  | 'addon_purchased'
+  | 'admin_subscription_granted'
+  | 'admin_addon_granted';
 
 export interface INotification {
   _id: string;
