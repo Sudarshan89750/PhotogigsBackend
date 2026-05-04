@@ -15,7 +15,7 @@ export const initSentry = (): void => {
   Sentry.init({
     dsn,
     environment: config.env,
-    release: `photogigs@${process.env.npm_package_version || '1.0.0'}`,
+    release: 'photogigs@' + (process.env.npm_package_version || '1.0.0'),
     integrations: [
       Sentry.httpIntegration(),
       Sentry.expressIntegration(),
@@ -52,7 +52,7 @@ export const captureException = (error: Error, context?: Record<string, any>): v
   });
 };
 
-export const captureMessage = (message: string, level: Sentry.Severity = Sentry.Severity.Info): void => {
+export const captureMessage = (message: string, level: Sentry.SeverityLevel = 'info'): void => {
   if (!_sentryInitialized) return;
   Sentry.captureMessage(message, level);
 };
@@ -64,5 +64,5 @@ export const setUser = (userId: string, email?: string): void => {
 
 export const clearUser = (): void => {
   if (!_sentryInitialized) return;
-  Sentry.configureScope((scope) => scope.clearUser());
+  Sentry.setUser(null);
 };
