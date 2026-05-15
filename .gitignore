@@ -23,7 +23,7 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
-
+ package-lock.json
 # Firebase service account — NEVER commit
 *service-account*.json
 *firebase-adminsdk*.json
