@@ -20,6 +20,7 @@ import MessageModel from '../models/mongo/message.model';
 import CampaignModel from '../models/mongo/campaign.model';
 import DisputeModel from '../models/mongo/dispute.model';
 import HashtagModel from '../models/mongo/hashtag.model';
+import ReviewModel from '../models/mongo/review.model';
 
 export const loadMongo = async (): Promise<void> => {
   try {
@@ -53,4 +54,5 @@ export const loadMongo = async (): Promise<void> => {
   Container.set('campaignModel', CampaignModel);
   Container.set('disputeModel', DisputeModel);
   Container.set('hashtagModel', HashtagModel);
+  Container.set('reviewModel', ReviewModel);
 };

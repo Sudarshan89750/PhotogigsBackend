@@ -67,4 +67,12 @@ export default (app: Router): void => {
       res.json({ success: true, data });
     } catch (e) { next(e); }
   });
+
+  // My proposals (freelancer view)
+  router.get('/my', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const proposals = await svc.getMyProposals(req.currentUser!.userId);
+      res.json({ success: true, data: proposals });
+    } catch (e) { next(e); }
+  });
 };

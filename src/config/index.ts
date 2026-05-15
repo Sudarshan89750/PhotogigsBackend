@@ -46,7 +46,8 @@ export const config = {
   },
 
   redis: {
-    url: required('REDIS_URL'),
+    url: optional('REDIS_URL', ''),
+    enabled: optional('REDIS_ENABLED', 'true').toLowerCase() === 'true',
   },
 
   jwt: {

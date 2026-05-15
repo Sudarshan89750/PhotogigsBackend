@@ -28,6 +28,7 @@ import loadAnalyticsRoutes from '../api/routes/analytics.routes';
 import loadWebhookRoutes from '../api/routes/webhook.routes';
 import loadCampaignRoutes from '../api/routes/campaign.routes';
 import loadSubscriptionRoutes from '../api/routes/subscription.routes';
+import loadReviewRoutes from '../api/routes/review.routes';
 
 export const loadExpress = (): express.Application => {
   const app = express();
@@ -57,14 +58,7 @@ export const loadExpress = (): express.Application => {
             if (allowedOrigins.has(origin)) return callback(null, true);
             return callback(new Error('Not allowed by CORS'));
           }
-        : (origin, callback) => {
-            // Allow any localhost port in development (Flutter web uses random ports)
-            if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-              callback(null, true);
-            } else {
-              callback(null, false);
-            }
-          },
+        : true, // Allow all origins in development
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     })
@@ -74,8 +68,11 @@ export const loadExpress = (): express.Application => {
   const makeRedisStore = (prefix: string) =>
     new RedisStore({
       // rate-limit-redis v4 sendCommand API
-      sendCommand: (...args: string[]) =>
-        redis.getClient().call(args[0], ...args.slice(1)) as Promise<number>,
+      sendCommand: (...args: string[]) => {
+        const client = redis.getClient();
+        if (!client) return Promise.resolve(0);
+        return client.call(args[0], ...args.slice(1)) as Promise<number>;
+      },
       prefix,
     });
 
@@ -84,7 +81,7 @@ export const loadExpress = (): express.Application => {
     max: config.rateLimit.max,
     standardHeaders: true,
     legacyHeaders: false,
-    store: makeRedisStore('rl:global:'),
+    store: config.redis.enabled ? makeRedisStore('rl:global:') : undefined,
     message: { success: false, status: 429, message: 'Too many requests', code: 'RATE_LIMITED' },
   });
 
@@ -92,7 +89,7 @@ export const loadExpress = (): express.Application => {
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 20,
-    store: makeRedisStore('rl:auth:'),
+    store: config.redis.enabled ? makeRedisStore('rl:auth:') : undefined,
     message: { success: false, status: 429, message: 'Too many auth attempts', code: 'RATE_LIMITED' },
   });
 
@@ -125,7 +122,7 @@ export const loadExpress = (): express.Application => {
 
       const [pgOk, redisOk] = await Promise.allSettled([
         pg.query('SELECT 1'),
-        redisClient.ping(),
+        redisClient ? redisClient.ping() : Promise.resolve(),
       ]);
 
       const healthy =
@@ -166,6 +163,7 @@ export const loadExpress = (): express.Application => {
   loadWebhookRoutes(apiRouter);
   loadCampaignRoutes(apiRouter);
   loadSubscriptionRoutes(apiRouter);
+  loadReviewRoutes(apiRouter);
 
   // ─── 404 ──────────────────────────────────────────────────────────────────
   app.use((_req: Request, res: Response) => {

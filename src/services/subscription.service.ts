@@ -206,6 +206,11 @@ export class SubscriptionService {
         [targetUserId]
       );
 
+      await this.db.query(
+        `INSERT INTO admin_audit_logs (admin_user_id, action, target_user_id, details) VALUES ($1, 'grant_subscription', $2, $3)`,
+        [adminUserId, targetUserId, JSON.stringify({ planId, durationDays })]
+      );
+
       await this.notif.create({
         userId: targetUserId,
         type: 'admin_subscription_granted',
@@ -230,6 +235,11 @@ export class SubscriptionService {
       await this.db.query(
         `UPDATE users SET addon_image_limit = addon_image_limit + $1 WHERE id = $2`,
         [quantity, targetUserId]
+      );
+
+      await this.db.query(
+        `INSERT INTO admin_audit_logs (admin_user_id, action, target_user_id, details) VALUES ($1, 'grant_addon', $2, $3)`,
+        [adminUserId, targetUserId, JSON.stringify({ quantity })]
       );
 
       await this.notif.create({

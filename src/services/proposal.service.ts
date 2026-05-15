@@ -142,4 +142,24 @@ export class ProposalService {
     await proposal.save();
     return proposal;
   }
+
+  async getMyProposals(freelancerId: string) {
+    const proposals = await this.proposalModel
+      .find({ freelancerId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Enrich with job details
+    const jobIds = [...new Set(proposals.map((p: any) => p.jobId))];
+    const jobs = await this.jobModel
+      .find({ _id: { $in: jobIds } })
+      .select('_id title status category budget city clientId')
+      .lean();
+    const jobMap = new Map(jobs.map((j: any) => [String(j._id), j]));
+
+    return proposals.map((p: any) => ({
+      ...p,
+      job: jobMap.get(String(p.jobId)) ?? null,
+    }));
+  }
 }

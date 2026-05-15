@@ -28,30 +28,34 @@ const bootstrap = async (): Promise<void> => {
   loadSocket(httpServer);
 
   // 5. Start BullMQ workers
-  const postModel = Container.get<any>('postModel');
-  const notificationModel = Container.get<any>('notificationModel');
-  const marketplaceOrderModel = Container.get<any>('marketplaceOrderModel');
-  // FIX: Pass orderModel to workers for resilient refunds
-  const stopWorkers = startWorkers({ postModel, notificationModel, marketplaceOrderModel });
-  
-  // 6. Schedule Periodic Jobs (Batch Presence Sync Every 5 mins)
-  presenceQueue.add('sync', {}, {
-    repeat: { every: 5 * 60 * 1000 },
-    jobId: 'presence_sync_default'
-  });
+  let stopWorkers = async () => {};
+  if (config.redis.enabled) {
+    const postModel = Container.get<any>('postModel');
+    const notificationModel = Container.get<any>('notificationModel');
+    const marketplaceOrderModel = Container.get<any>('marketplaceOrderModel');
+    stopWorkers = startWorkers({ postModel, notificationModel, marketplaceOrderModel });
+
+    // 6. Schedule Periodic Jobs (Batch Presence Sync Every 5 mins)
+    presenceQueue.add('sync', {}, {
+      repeat: { every: 5 * 60 * 1000 },
+      jobId: 'presence_sync_default'
+    }).catch((err: any) => logger.error('Failed to schedule periodic job', { err: err.message }));
+  } else {
+    logger.info('📦 BullMQ workers and queues disabled (Redis disabled)');
+  }
 
   // 6. Start listening
   httpServer.listen(config.port, () => {
-    logger.warn(`✌️ PhotoGigs API running on port ${config.port} [${config.env}]`);
+    logger.warn('PhotoGigs API running on port ' + config.port + ' [' + config.env + ']');
   });
 
-  // ─── Graceful shutdown ──────────────────────────────────────────────────────
+  // --- Graceful shutdown -----------------------------------------------------
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    logger.warn(`${signal} received – shutting down gracefully`);
+    logger.warn(signal + ' received - shutting down gracefully');
     const forceExit = setTimeout(() => {
       logger.error('Forced shutdown after timeout');
       process.exit(1);
@@ -60,7 +64,7 @@ const bootstrap = async (): Promise<void> => {
     try {
       await Promise.allSettled([
         stopWorkers(),
-        presenceQueue.close(),
+        config.redis.enabled ? presenceQueue.close() : Promise.resolve(),
       ]);
 
       const pgPool = Container.has('pgPool') ? Container.get<Pool>('pgPool') : null;
@@ -88,8 +92,12 @@ const bootstrap = async (): Promise<void> => {
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
   process.on('SIGINT', () => { void shutdown('SIGINT'); });
 
-  process.on('unhandledRejection', (reason) => {
-    logger.error('Unhandled rejection', { reason });
+  process.on('unhandledRejection', (reason: any) => {
+    logger.error('Unhandled rejection', { 
+      message: reason?.message, 
+      stack: reason?.stack,
+      reason: reason
+    });
     if (!config.isProduction) process.exit(1);
   });
 

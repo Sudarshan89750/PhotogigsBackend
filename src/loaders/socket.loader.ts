@@ -24,9 +24,18 @@ export const loadSocket = (httpServer: HttpServer): SocketServer => {
   const redisService = Container.get(RedisService);
   const chatService = Container.get(ChatService);
   const pubClient = redisService.getClient();
-  const subClient = redisService.duplicate();
-  io.adapter(createAdapter(pubClient, subClient));
-  logger.info('✌️ Socket.io Redis adapter attached');
+  
+  if (pubClient) {
+    const subClient = redisService.duplicate();
+    if (subClient) {
+      io.adapter(createAdapter(pubClient, subClient));
+      logger.info('✌️ Socket.io Redis adapter attached');
+    } else {
+      logger.info('📦 Socket.io using default memory adapter (Redis duplicate failed)');
+    }
+  } else {
+    logger.info('📦 Socket.io using default memory adapter (Redis disabled/failed)');
+  }
 
   // Auth middleware
   io.use((socket, next) => {

@@ -47,13 +47,16 @@ export default (app: Router): void => {
 
   const svc = Container.get(AuthService);
   const redisService = Container.get(RedisService);
+  const useMemoryStore = redisService.isUsingMemory();
 
   const authLimiter = rateLimit({
-    store: new RedisStore({
-      // @ts-ignore - The types for rate-limit-redis 4.x can be tricky with ioredis
-      sendCommand: (...args: string[]) => redisService.getClient().call(...args),
-      prefix: 'rl:auth:',
-    }),
+    store: useMemoryStore
+      ? undefined
+      : new RedisStore({
+          // @ts-ignore - The types for rate-limit-redis 4.x can be tricky with ioredis
+          sendCommand: (...args: string[]) => redisService.getClient()?.call(...args) ?? [],
+          prefix: 'rl:auth:',
+        }),
     windowMs: 15 * 60 * 1000,
     max: 10,
     message: {

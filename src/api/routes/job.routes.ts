@@ -81,6 +81,13 @@ export default (app: Router): void => {
     } catch (e) { next(e); }
   });
 
+  router.get('/my/posted/counts', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await svc.getPostedJobProposalCounts(req.currentUser!.userId);
+      res.json({ success: true, data: result });
+    } catch (e) { next(e); }
+  });
+
   router.get('/my/assigned', authenticate, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await svc.getFreelancerJobs(req.currentUser!.userId, req.query as Record<string, unknown>);

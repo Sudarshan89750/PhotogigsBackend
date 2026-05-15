@@ -199,7 +199,7 @@ export class JobService {
     return job;
   }
 
-  async confirmReceipt(jobId: string, freelancerId: string) {
+async confirmReceipt(jobId: string, freelancerId: string) {
     const job = await this.jobModel.findOne({
       _id: jobId,
       freelancerId,
@@ -207,19 +207,27 @@ export class JobService {
     });
     if (!job) throw new NotFoundError('Job not in completed state to confirm receipt');
 
-    // Here we could add a new status like 'closed' or just keep it 'completed'.
-    // We will assume 'closed' for fully settled.
     job.status = 'closed';
     await job.save();
 
-    await this.notif.create({
-      userId: job.clientId,
-      type: 'receipt_confirmed',
-      title: 'Payment Receipt Confirmed',
-      body: `The freelancer has confirmed receipt of payment for: ${job.title}.`,
-      referenceId: jobId,
-      referenceType: 'job'
-    });
+    await Promise.all([
+      this.notif.create({
+        userId: job.clientId,
+        type: 'receipt_confirmed',
+        title: 'Payment Confirmed',
+        body: `Freelancer confirmed receipt for: ${job.title}. Leave a review to help them grow!`,
+        referenceId: jobId,
+        referenceType: 'job',
+      }),
+      this.notif.create({
+        userId: freelancerId,
+        type: 'receipt_confirmed',
+        title: 'All Done! 🎉',
+        body: `You confirmed receipt for "${job.title}". The client has been notified to leave a review.`,
+        referenceId: jobId,
+        referenceType: 'job',
+      }),
+    ]);
 
     return job;
   }
@@ -278,5 +286,27 @@ export class JobService {
       data, 
       meta: buildMeta({ page, limit, hasNextPage }) 
     };
+  }
+
+  async getPostedJobProposalCounts(clientId: string) {
+    const jobs = await this.jobModel
+      .find({ clientId, status: 'open' })
+      .select('_id')
+      .lean();
+    
+    const jobIds = jobs.map((j: any) => j._id);
+    
+    if (jobIds.length === 0) return [];
+
+    const proposalCounts = await this.proposalModel.aggregate([
+      { $match: { jobId: { $in: jobIds.map((id: any) => String(id)) } } },
+      { $group: { _id: '$jobId', count: { $sum: 1 } } },
+    ]);
+
+    const countMap = new Map(proposalCounts.map((p: any) => [p._id, p.count]));
+    return (jobIds as any[]).map((id) => ({
+      jobId: String(id),
+      count: countMap.get(String(id)) ?? 0,
+    }));
   }
 }

@@ -129,6 +129,7 @@ export const startWorkers = (models: {
       const redisSvc = Container.get(RedisService);
       const pool = Container.get<Pool>('pgPool');
       const redis = redisSvc.getClient();
+      if (!redis) return;
 
       // Pop up to 5000 user IDs to process in this batch
       const userIds = await redis.spop('presence:pending_sync', 5000);
@@ -149,7 +150,7 @@ export const startWorkers = (models: {
       } catch (err) {
         logger.error('Batch presence sync failed', { err: (err as any).message });
         // Re-add to set so they aren't lost (optional, but safer)
-        await redis.sadd('presence:pending_sync', ...userIds);
+        if (redis) await redis.sadd('presence:pending_sync', ...userIds);
         throw err;
       }
     },

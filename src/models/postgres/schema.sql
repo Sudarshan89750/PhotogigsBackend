@@ -208,3 +208,18 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_reviews_recalc_rating
   AFTER INSERT ON reviews
   FOR EACH ROW EXECUTE FUNCTION recalc_user_rating();
+
+-- ─── Admin Audit Logs ─────────────────────────────────────────────────────────
+
+CREATE TABLE admin_audit_logs (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_user_id    UUID NOT NULL REFERENCES users(id),
+  action         VARCHAR(100) NOT NULL,
+  target_user_id  UUID REFERENCES users(id),
+  details       JSONB,
+  ip_address    VARCHAR(45),
+  created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_admin_audit_logs_admin ON admin_audit_logs(admin_user_id, created_at DESC);
+CREATE INDEX idx_admin_audit_logs_target ON admin_audit_logs(target_user_id, created_at DESC);
