@@ -244,6 +244,20 @@ async confirmReceipt(jobId: string, freelancerId: string) {
     return job;
   }
 
+  async closeJob(jobId: string, clientId: string) {
+    const job = await this.jobModel.findOne({ _id: jobId, clientId });
+    if (!job) throw new NotFoundError('Job not found');
+    
+    if (job.status === 'closed') {
+      throw new BadRequestError('Job is already closed');
+    }
+
+    job.status = 'closed';
+    await job.save();
+
+    return job;
+  }
+
   async getClientJobs(clientId: string, query: Record<string, unknown>) {
     const { page, limit, skip } = parsePagination(query);
     const filter: Record<string, unknown> = { clientId };
@@ -293,9 +307,9 @@ async confirmReceipt(jobId: string, freelancerId: string) {
       .find({ clientId, status: 'open' })
       .select('_id')
       .lean();
-    
+
     const jobIds = jobs.map((j: any) => j._id);
-    
+
     if (jobIds.length === 0) return [];
 
     const proposalCounts = await this.proposalModel.aggregate([
@@ -308,5 +322,43 @@ async confirmReceipt(jobId: string, freelancerId: string) {
       jobId: String(id),
       count: countMap.get(String(id)) ?? 0,
     }));
+  }
+
+  async getJobsForMap(query: Record<string, unknown>) {
+    const filter: Record<string, any> = { status: 'open', location: { $exists: true, $ne: null } };
+
+    if (query.category) filter.category = query.category;
+
+    if (query.minBudget || query.maxBudget) {
+      filter.budget = {
+        ...(query.minBudget ? { $gte: Number(query.minBudget) } : {}),
+        ...(query.maxBudget ? { $lte: Number(query.maxBudget) } : {}),
+      };
+    }
+
+    if (query.search) {
+      filter.$text = { $search: query.search as string };
+    }
+
+    const limit = Math.min(Number(query.limit ?? 200), 200);
+
+    const jobs = await this.jobModel
+      .find(filter)
+      .select('_id title budget category city state location createdAt')
+      .limit(limit)
+      .lean();
+
+    return {
+      data: jobs.map((j: any) => ({
+        id: j._id.toString(),
+        title: j.title,
+        budget: j.budget,
+        category: j.category,
+        city: j.city,
+        state: j.state,
+        latitude: j.location?.coordinates?.[1],
+        longitude: j.location?.coordinates?.[0],
+      })),
+    };
   }
 }

@@ -137,4 +137,12 @@ export default (app: Router): void => {
       res.json({ success: true, message: 'Rental marked as returned, deposit refunded', data });
     } catch (e) { next(e); }
   });
+
+  // Mark listing as sold out
+  router.patch('/listings/:listingId/sold', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await svc.markAsSold(req.params.listingId, req.currentUser!.userId);
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  });
 };

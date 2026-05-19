@@ -288,4 +288,18 @@ export class MarketplaceService {
 
     return order;
   }
+
+  async markAsSold(listingId: string, userId: string) {
+    const listing = await this.listingModel.findOne({ _id: listingId, sellerId: userId });
+    if (!listing) throw new NotFoundError('Listing not found or not yours');
+
+    if (listing.status === 'sold') {
+      throw new BadRequestError('Listing is already marked as sold');
+    }
+
+    listing.status = 'sold';
+    await listing.save();
+
+    return listing;
+  }
 }

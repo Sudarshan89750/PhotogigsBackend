@@ -68,6 +68,19 @@ export const config = {
     apiSecret: required('CLOUDINARY_API_SECRET'),
   },
 
+  wasabi: {
+    endpoint: optional('WASABI_ENDPOINT', 'https://s3.ap-southeast-1.wasabisys.com'),
+    region: optional('WASABI_REGION', 'ap-southeast-1'),
+    accessKeyId: optional('WASABI_ACCESS_KEY_ID', ''),
+    secretAccessKey: optional('WASABI_SECRET_ACCESS_KEY', ''),
+    bucket: optional('WASABI_BUCKET', 'photogigs-uploads'),
+  },
+
+  storage: {
+    provider: optional('STORAGE_PROVIDER', 'wasabi') as 'wasabi' | 'cloudinary',
+    enableFallback: optional('ENABLE_STORAGE_FALLBACK', 'true').toLowerCase() === 'true',
+  },
+
   phonepe: {
     merchantId: optional('PHONEPE_MERCHANT_ID', ''),
     apiKey: optional('PHONEPE_API_KEY', ''),

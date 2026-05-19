@@ -113,4 +113,35 @@ export default (app: Router): void => {
       res.json({ success: true, data });
     } catch (e) { next(e); }
   });
+
+  // Update availability status (available, booked, unavailable)
+  router.patch('/me/availability', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { status } = req.body;
+      if (!['available', 'booked', 'unavailable'].includes(status)) {
+        throw new BadRequestError('Status must be: available, booked, or unavailable');
+      }
+      const data = await svc.updateAvailabilityStatus(req.currentUser!.userId, status);
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  });
+
+  // Update presence / last_active_at (called when user is online)
+  router.post('/me/ping', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await svc.updateLastActive(req.currentUser!.userId);
+      res.json({ success: true, message: 'pong' });
+    } catch (e) { next(e); }
+  });
+
+  // Update location (called periodically or on significant move)
+  router.post('/me/location', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { latitude, longitude } = req.body;
+      if (latitude != null && longitude != null) {
+        await svc.updateLocation(req.currentUser!.userId, Number(latitude), Number(longitude));
+      }
+      res.json({ success: true });
+    } catch (e) { next(e); }
+  });
 };

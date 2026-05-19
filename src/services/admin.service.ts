@@ -49,7 +49,8 @@ export class AdminService {
 
     const where = conditions.join(' AND ');
     const { rows } = await this.db.query(
-      `SELECT id, email, first_name, last_name, status, role, city, created_at
+      `SELECT id, email, first_name, last_name, status, role, city, created_at,
+              membership_tier, base_image_limit, addon_image_limit, used_images
        FROM users WHERE ${where}
        ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
       [...values, limit + 1, skip]
@@ -182,6 +183,30 @@ export class AdminService {
 
   async recordCampaignClick(campaignId: string) {
     await this.campaignModel.findByIdAndUpdate(campaignId, { $inc: { clicks: 1 } });
+  }
+
+  async recordCampaignClickForUser(campaignId: string, userId: string) {
+    const redis = Container.get(RedisService);
+    const key = `campaign_click:${campaignId}:${userId}`;
+    const clicked = await redis.get(key);
+    if (!clicked) {
+      await redis.set(key, '1');
+      await redis.expire(key, 60 * 60 * 24 * 30);
+      await this.campaignModel.findByIdAndUpdate(campaignId, { $inc: { clicks: 1 } });
+    }
+  }
+
+  async getActiveCampaigns() {
+    const now = new Date();
+    return this.campaignModel
+      .find({
+        status: 'active',
+        startDate: { $lte: now },
+        endDate: { $gte: now },
+        'media.0': { $exists: true },
+      })
+      .select('title description media ctaText ctaLink')
+      .lean();
   }
 
   // ─── Orders / Revenue ─────────────────────────────────────────────────────

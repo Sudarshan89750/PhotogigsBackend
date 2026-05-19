@@ -1,0 +1,132 @@
+# PhotoGigs Backend — Render Blueprint
+# Deploy: push to GitHub → Render auto-deploys
+# Docs: https://render.com/docs/blueprint-spec
+
+database:
+  type: psql
+  version: "15"
+
+services:
+  # ─── API Service ──────────────────────────────────────────────────────────
+  - type: web
+    name: photogigs-api
+    runtime: docker
+    region: singapore
+    plan: free
+    dockerfilePath: ./Dockerfile
+
+    # Health check — uses the existing /health endpoint
+    healthCheckPath: /health
+    healthCheckTimeout: 30
+    waitingGracePeriod: 60s
+
+    envVars:
+      # Core
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+
+      # Frontend URL (Flutter app — no CORS issues on mobile, but needed for Socket.io)
+      - key: FRONTEND_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+
+      # ─── Databases (set via Render dashboard — not committed) ─────────────
+      - key: DATABASE_URL
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+
+      # ─── Redis (Upstash recommended for free tier) ─────────────────────
+      - key: REDIS_URL
+        sync: false
+      - key: REDIS_ENABLED
+        value: "true"
+
+      # ─── JWT Secrets — MUST be 32+ chars in production ─────────────────
+      # Generate with: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: JWT_ACCESS_EXPIRY
+        value: "15m"
+      - key: JWT_REFRESH_EXPIRY
+        value: "7d"
+
+      # ─── Email (Resend) ──────────────────────────────────────────────────
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: "noreply@photogigs.in"
+
+      # ─── Cloudinary (primary storage) ───────────────────────────────────
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+
+      # ─── Wasabi (secondary/fallback storage) ────────────────────────────
+      # Uncomment and fill in when you have Wasabi credentials
+      # Wasabi is S3-compatible — create account at wasabi.com (free tier available)
+      # - key: STORAGE_PROVIDER
+      #   value: "wasabi"
+      - key: WASABI_ENDPOINT
+        value: "https://s3.ap-southeast-1.wasabisys.com"
+      - key: WASABI_REGION
+        value: "ap-southeast-1"
+      - key: WASABI_ACCESS_KEY_ID
+        sync: false
+      - key: WASABI_SECRET_ACCESS_KEY
+        sync: false
+      - key: WASABI_BUCKET
+        value: "photogigs-uploads"
+      - key: ENABLE_STORAGE_FALLBACK
+        value: "true"
+
+      # ─── Firebase (Push Notifications) ──────────────────────────────────
+      # Paste the entire JSON as a single-line string via Render dashboard
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+
+      # ─── Payment (PhonePe) ──────────────────────────────────────────────
+      - key: PHONEPE_MERCHANT_ID
+        sync: false
+      - key: PHONEPE_API_KEY
+        sync: false
+      - key: PHONEPE_API_KEY_INDEX
+        value: "1"
+      - key: PHONEPE_BASE_URL
+        value: "https://api-preprod.phonepe.com/apis/pg-sandbox"
+      - key: PHONEPE_REDIRECT_URL
+        sync: false
+      - key: PHONEPE_CALLBACK_URL
+        sync: false
+
+      # ─── Rate Limiting ──────────────────────────────────────────────────
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "900000"
+      - key: RATE_LIMIT_MAX
+        value: "100"
+
+      # ─── Platform ───────────────────────────────────────────────────────
+      - key: PLATFORM_FEE_PERCENT
+        value: "2"
+
+      # ─── Optional: Error Tracking (Sentry) ──────────────────────────────
+      # Get DSN from sentry.io → Project Settings → Client Keys
+      # - key: SENTRY_DSN
+      #   sync: false
+
+# ─── PostgreSQL (optional managed instance via Render) ─────────────────────
+# Uncomment if using Render's managed PostgreSQL instead of Neon/Supabase
+#
+# databases:
+#   - name: photogigs-db
+#     databaseName: photogigs
+#     plan: free
+#     ipAllowList: []

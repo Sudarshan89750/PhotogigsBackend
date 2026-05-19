@@ -27,7 +27,8 @@ export class UserService {
     const { rows } = await this.db.query(
       `SELECT id, first_name, last_name, city, state, country,
               avatar_url, bio, skills, hourly_rate, portfolio_urls,
-              average_rating, total_reviews, created_at
+              average_rating, total_reviews, created_at,
+              availability_status, last_active_at
        FROM users WHERE id = $1 AND status = 'approved'`,
       [userId]
     );
@@ -123,7 +124,8 @@ export class UserService {
     if (ids.length === 0) return [];
     const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
     const { rows } = await this.db.query(
-      `SELECT id, first_name, last_name, avatar_url, city, average_rating, skills
+      `SELECT id, first_name, last_name, avatar_url, city, average_rating, skills,
+              availability_status, last_active_at
        FROM users WHERE id IN (${placeholders})`,
       ids
     );
@@ -164,5 +166,28 @@ export class UserService {
         `You have reached your image quota limit of ${totalLimit}. Please purchase an add-on or upgrade your plan.`
       );
     }
+  }
+
+  async updateAvailabilityStatus(userId: string, status: string) {
+    const { rows } = await this.db.query(
+      `UPDATE users SET availability_status = $1, updated_at = NOW() WHERE id = $2 RETURNING id, availability_status`,
+      [status, userId]
+    );
+    if (!rows[0]) throw new NotFoundError('User not found');
+    return rows[0];
+  }
+
+  async updateLastActive(userId: string) {
+    await this.db.query(
+      `UPDATE users SET last_active_at = NOW() WHERE id = $1`,
+      [userId]
+    );
+  }
+
+  async updateLocation(userId: string, latitude: number, longitude: number) {
+    await this.db.query(
+      `UPDATE users SET latitude = $1, longitude = $2, last_active_at = NOW() WHERE id = $3`,
+      [latitude, longitude, userId]
+    );
   }
 }

@@ -28,7 +28,7 @@ export default (app: Router): void => {
   const cloudinary = Container.get(CloudinaryService);
 
   // Create or get conversation
-  router.post('/conversations', authenticate, requireProMembership, validate(createConvSchema), async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/conversations', authenticate, validate(createConvSchema), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { participantId, jobId, marketplaceListingId } = req.body;
       const data = await svc.getOrCreateConversation(
@@ -58,24 +58,33 @@ export default (app: Router): void => {
   });
 
   // Send text message
-  router.post('/conversations/:conversationId/messages', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/conversations/:conversationId/messages', authenticate, upload.single('file'), async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Handle multipart (file) or JSON (text) in same endpoint
-      const handler = async () => {
-        if (req.is('multipart/form-data')) {
-          // Handled below via multer
-          return;
-        }
+      let data;
+      
+      if (req.file) {
+        // File uploaded via multipart
+        const fileUrl = await cloudinary.uploadBuffer(req.file.buffer, 'chat', 'auto');
+        const messageType = req.file.mimetype.startsWith('image/') ? 'image' : 'file';
+        data = await svc.sendMessage(
+          req.params.conversationId,
+          req.currentUser!.userId,
+          req.file.originalname,
+          messageType,
+          fileUrl
+        );
+      } else {
+        // Text message
         const parsed = sendMessageSchema.safeParse(req.body);
         if (!parsed.success) throw new BadRequestError(parsed.error.errors[0].message);
-        return svc.sendMessage(
+        data = await svc.sendMessage(
           req.params.conversationId,
           req.currentUser!.userId,
           parsed.data.content,
           parsed.data.messageType
         );
-      };
-      const data = await handler();
+      }
+      
       res.status(201).json({ success: true, data });
     } catch (e) { next(e); }
   });
@@ -120,6 +129,26 @@ export default (app: Router): void => {
         messageIds
       );
       res.json(result);
+    } catch (e) { next(e); }
+  });
+
+  // Request to message a user (requires acceptance)
+  router.post('/message-request', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { userId } = req.body;
+      if (!userId) throw new BadRequestError('userId is required');
+      await svc.sendMessageRequest(req.currentUser!.userId, userId);
+      res.json({ success: true, message: 'Message request sent' });
+    } catch (e) { next(e); }
+  });
+
+  // Accept/Decline message request
+  router.post('/message-request/:requestId/respond', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { action } = req.body; // 'accept' or 'decline'
+      if (!['accept', 'decline'].includes(action)) throw new BadRequestError('action must be accept or decline');
+      await svc.respondToMessageRequest(req.params.requestId, req.currentUser!.userId, action);
+      res.json({ success: true, message: action === 'accept' ? 'Request accepted' : 'Request declined' });
     } catch (e) { next(e); }
   });
 };

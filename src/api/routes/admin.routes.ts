@@ -3,9 +3,11 @@ import { Container } from 'typedi';
 import { z } from 'zod';
 import { AdminService } from '../../services/admin.service';
 import { CloudinaryService } from '../../services/cloudinary.service';
+import { SubscriptionService } from '../../services/subscription.service';
 import { authenticate, requireAdmin } from '../middlewares/auth.middleware';
 import { validate } from '../middlewares/validate.middleware';
 import { upload } from '../middlewares/upload.middleware';
+import { BadRequestError } from '../../utils/errors';
 
 const router = Router();
 
@@ -13,7 +15,7 @@ const campaignSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
   ctaText: z.string().optional(),
-  ctaLink: z.string().url().optional(),
+  ctaLink: z.string().optional(),
   targetType: z.enum(['all', 'location']).default('all'),
   targetCities: z.array(z.string()).optional(),
   targetStates: z.array(z.string()).optional(),
@@ -21,6 +23,7 @@ const campaignSchema = z.object({
   startDate: z.string().datetime(),
   endDate: z.string().datetime(),
   maxViewsPerUser: z.number().int().positive().default(3),
+  status: z.enum(['draft', 'active', 'paused', 'closed']).default('active'),
 });
 
 const refundSchema = z.object({
@@ -73,20 +76,20 @@ export default (app: Router): void => {
 
   // ─── Campaigns ────────────────────────────────────────────────────────────
 
-  router.post('/campaigns', authenticate, requireAdmin, upload.array('media', 5), async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/campaigns', authenticate, requireAdmin, validate(campaignSchema), upload.array('media', 5), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const files = req.files as Express.Multer.File[];
       const media = files?.length
         ? await Promise.all(files.map(f => cloudinary.uploadBuffer(f.buffer, 'campaigns', 'auto')))
         : [];
 
-      // Parse JSON arrays that come as strings from multipart
       const body = {
         ...req.body,
         targetCities: req.body.targetCities ? JSON.parse(req.body.targetCities) : undefined,
         targetStates: req.body.targetStates ? JSON.parse(req.body.targetStates) : undefined,
-        maxViewsPerUser: req.body.maxViewsPerUser ? Number(req.body.maxViewsPerUser) : 3,
+        maxViewsPerUser: Number(req.body.maxViewsPerUser) || 3,
         media,
+        ctaLink: req.body.ctaLink || null,
       };
 
       const data = await svc.createCampaign(body);
@@ -156,6 +159,55 @@ export default (app: Router): void => {
     try {
       await svc.manualRefund(req.body.referenceId, req.body.type);
       res.json({ success: true, message: 'Refund processed' });
+    } catch (e) { next(e); }
+  });
+
+  // ─── Subscription & Quota Management ─────────────────────────────────────
+
+  const subSvc = Container.get(SubscriptionService);
+
+  router.post('/users/:userId/subscription', authenticate, requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { planId, days } = req.body;
+      const result = await subSvc.adminGrantSubscription(req.currentUser!.userId, req.params.userId, planId, days || 30);
+      res.json(result);
+    } catch (e) { next(e); }
+  });
+
+  router.delete('/users/:userId/subscription', authenticate, requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await subSvc.adminCancelUserSubscription(req.currentUser!.userId, req.params.userId);
+      res.json(result);
+    } catch (e) { next(e); }
+  });
+
+  router.post('/users/:userId/quota', authenticate, requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const baseLimit = Number(req.body.baseLimit);
+      const addonLimit = Number(req.body.addonLimit);
+      if (isNaN(baseLimit) || isNaN(addonLimit)) {
+        throw new BadRequestError('baseLimit and addonLimit are required and must be numbers');
+      }
+      const result = await subSvc.adminSetQuota(req.currentUser!.userId, req.params.userId, baseLimit, addonLimit);
+      res.json(result);
+    } catch (e) { next(e); }
+  });
+
+  router.post('/users/:userId/addons', authenticate, requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { quantity } = req.body;
+      await subSvc.adminGrantAddons(req.currentUser!.userId, req.params.userId, quantity);
+      res.json({ success: true, message: 'Add-ons granted' });
+    } catch (e) { next(e); }
+  });
+
+  // ─── Campaign Status Management ──────────────────────────────────────────
+
+  router.patch('/campaigns/:id/status', authenticate, requireAdmin, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { status } = req.body; // active, paused, discarded
+      await svc.updateCampaign(req.params.id, { status });
+      res.json({ success: true, message: `Campaign status updated to ${status}` });
     } catch (e) { next(e); }
   });
 };

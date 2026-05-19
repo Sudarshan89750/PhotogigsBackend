@@ -74,6 +74,13 @@ export default (app: Router): void => {
     } catch (e) { next(e); }
   });
 
+  router.get('/map', optionalAuthenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await svc.getJobsForMap(req.query as Record<string, unknown>);
+      res.json({ success: true, data: result.data });
+    } catch (e) { next(e); }
+  });
+
   router.get('/my/posted', authenticate, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await svc.getClientJobs(req.currentUser!.userId, req.query as Record<string, unknown>);
@@ -154,6 +161,14 @@ export default (app: Router): void => {
   router.post('/:jobId/cancel', authenticate, requireApproved, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = await svc.cancelJob(req.params.jobId, req.currentUser!.userId);
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  });
+
+  // Close/Complete a job (client marks as completed)
+  router.post('/:jobId/close', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await svc.closeJob(req.params.jobId, req.currentUser!.userId);
       res.json({ success: true, data });
     } catch (e) { next(e); }
   });

@@ -20,6 +20,15 @@ const shareSchema = z.object({
   sharedTo: z.enum(['in_app', 'external']),
 });
 
+const updatePostSchema = z.object({
+  content: z.string().min(1).max(5000).optional(),
+  hashtags: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  country: z.string().optional(),
+  mediaUrls: z.string().optional(),
+});
+
 // FIX: Posts now accept pre-uploaded media URLs (from Cloudinary direct upload)
 // Images only can still be uploaded via multipart (for backwards compat).
 // Videos MUST be uploaded directly to Cloudinary first — send the secure_url here.
@@ -108,6 +117,55 @@ export default (app: Router): void => {
     } catch (e) { next(e); }
   });
 
+  // Edit post
+  router.put('/posts/:id', authenticate, validate(updatePostSchema), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { content, hashtags, city, state, country, mediaUrls } = req.body;
+      
+      let parsedHashtags: string[] = [];
+      try { parsedHashtags = hashtags ? JSON.parse(hashtags) : []; }
+      catch { parsedHashtags = []; }
+
+      let parsedMediaUrls: string[] = [];
+      if (mediaUrls) {
+        try {
+          const parsed = JSON.parse(mediaUrls);
+          parsedMediaUrls = parsed.filter((url: string) =>
+            typeof url === 'string' &&
+            url.startsWith('https://res.cloudinary.com/')
+          );
+        } catch { /* ignore */ }
+      }
+
+      const data = await svc.updatePost(req.params.id, req.currentUser!.userId, {
+        content,
+        hashtags: parsedHashtags,
+        city,
+        state,
+        country,
+        media: parsedMediaUrls,
+      });
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  });
+
+  // Get comment replies
+  router.get('/comments/:commentId/replies', optionalAuthenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await svc.getCommentReplies(req.params.commentId, req.query as Record<string, unknown>);
+      res.json({ success: true, ...result });
+    } catch (e) { next(e); }
+  });
+
+  // Edit comment
+  router.put('/comments/:id', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { content } = req.body;
+      const data = await svc.updateComment(req.params.id, req.currentUser!.userId, content);
+      res.json({ success: true, data });
+    } catch (e) { next(e); }
+  });
+
   // ─── Likes ────────────────────────────────────────────────────────────────
 
   router.post('/posts/:id/like', authenticate, async (req: Request, res: Response, next: NextFunction) => {
@@ -163,7 +221,9 @@ export default (app: Router): void => {
   router.post('/posts/:id/share', authenticate, validate(shareSchema), async (req: Request, res: Response, next: NextFunction) => {
     try {
       await svc.sharePost(req.params.id, req.currentUser!.userId, req.body.sharedTo);
-      res.json({ success: true, message: 'Shared' });
+      const links = svc.getShareableLink(req.params.id);
+      const shareUrl = req.body.sharedTo === 'external' ? links.external : links.inApp;
+      res.json({ success: true, message: 'Shared', shareUrl });
     } catch (e) { next(e); }
   });
 

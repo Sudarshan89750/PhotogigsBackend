@@ -21,7 +21,9 @@
   | 'subscription_active'
   | 'addon_purchased'
   | 'admin_subscription_granted'
-  | 'admin_addon_granted';
+  | 'admin_addon_granted'
+  | 'admin_quota_updated'
+  | 'admin_subscription_cancelled';
 
 export interface INotification {
   _id: string;

@@ -1,0 +1,321 @@
+Based on the provided codebase, here is an analysis of the established code standards and architectural patterns:
+
+### 1. Architectural Pattern: Three-Layer Architecture
+
+The project follows a structured three-layer architecture to ensure separation of concerns:
+
+* **API/Route Layer:** Defined in `src/api/routes/`. These files handle incoming HTTP requests, extract parameters, and call the appropriate service methods. They do not contain business logic.
+* **Service Layer (Business Logic):** Defined in `src/services/`. This layer contains the core logic of the application. It interacts with the database (via models) and external APIs (via utils/services).
+* **Data Access Layer:** Defined in `src/models/`. This layer uses Mongoose schemas to define the structure of the data in MongoDB.
+
+### 2. Dependency Injection (DI)
+
+The project relies heavily on the `typedi` library for managing dependencies:
+
+* **Service Decoration:** Services are marked with the `@Service()` decorator to be automatically discoverable by the DI container.
+* **Dependency Resolution:** Dependencies like models and loggers are injected using the `@Inject()` decorator in constructors or retrieved directly via `Container.get()`.
+* **Centralized Loading:** A dedicated loader (`src/loaders/dependencyInjector.ts`) initializes the DI container by registering models and shared instances like the logger.
+
+### 3. Naming Conventions
+
+* **File Naming:** * **Folders:** Lowercase (e.g., `api`, `services`, `models`).
+* **Classes/Services:** camelCase (e.g., `tenant.ts`, `dependencyInjector.ts`).
+* **Interfaces:** PascalCase, often prefixed with "I" (e.g., `ITenant.ts`).
+
+
+* **Code Naming:**
+* **Classes:** PascalCase (e.g., `TenantService`, `ErrorHandler`).
+* **Variables/Methods:** camelCase (e.g., `upsertTenant`, `tenantModel`).
+* **Constants:** SCREAMING_SNAKE_CASE (e.g., `PRODUCTION`, `TENANT_PING_PREFIX`).
+
+
+
+### 4. Data Transfer Objects (DTOs)
+
+The project strictly uses DTOs for data passing between layers to avoid exposing database models directly to the API:
+
+* **Definition:** DTOs are defined as either classes or interfaces in `src/interfaces/`.
+* **Consistency:** Services typically have helper methods (e.g., `buildTenantDto`, `buildDeleteCacheDto`) to transform raw request data into standardized DTOs before processing.
+
+### 5. Error Handling and Logging
+
+* **Error Handling Middleware:** The application uses a centralized error-handling strategy. Routes catch errors and pass them to the next middleware via `next(e)`. A custom `ErrorHandler` class and `BaseError` are used to manage operational vs. non-operational errors.
+* **Logging:** `winston` is the standard logging library. A logger instance is injected into services and routes to provide consistent logging formats (e.g., using icons like 🔥 for errors and ✌️ for successful loads).
+
+### 6. Configuration Management
+
+* **Centralized Config:** All environment-specific variables are managed in `src/config/index.ts`. This file exports a single configuration object used throughout the app, preventing direct access to `process.env` in business logic.
+* **Environment Awareness:** The config determines database names, Kafka groups, and Sentry settings based on the `NODE_ENV` (Production vs. Staging vs. Development).
+
+### 7. API Design Standards
+
+* **Modular Routes:** Each feature (e.g., `tenant`) has its own route file that exports a function to attach its routes to the main Express app.
+* **Standardized Responses:** Responses generally use HTTP status code `201` for successful operations (even GET requests in some cases here) and return data wrapped in a JSON object.
+* **Middleware Usage:** Authentication and user context are handled via modular middleware (e.g., `middlewares.attachCurrentUser`) applied to specific route definitions.
+
+### 8. System Startup and Shutdown
+
+* **Loaders Pattern:** The `app.ts` file uses a "Loader" pattern (`src/loaders/index.ts`) to initialize components (Database, DI, Express, Swagger) in a specific, asynchronous sequence.
+* **Graceful Shutdown:** The server includes listeners for `SIGINT` and `SIGTERM` to close the Express server and exit gracefully, ensuring no hung processes during deployments.
+
+The provided codebase follows a strict set of architectural standards designed for scalability, type safety, and clear separation of concerns. Below is an explanation of the specific standards for DTOs, Interfaces, Services, Utils, and Models as observed in the project.
+
+### 1. DTO (Data Transfer Object) Standards
+
+DTOs are used to transfer data between the API layer and the Service layer, ensuring that the internal database structure is not directly exposed and that the data is validated and typed.
+
+* **Definition Placement:** DTOs are defined as classes or interfaces within the `src/interfaces/` directory.
+* **Transformation Logic (`build...Dto`):** Services include specific methods (e.g., `buildTenantDto`, `buildDeleteCacheDto`) to transform the raw Express `Request` object into a typed DTO. This prevents the Service logic from being tightly coupled to the Express framework.
+* **Validation:** By using DTO classes, the application can enforce constraints, such as checking the length of an API key or ensuring a tenant ID is provided before proceeding with business logic.
+
+### 2. Interface Standards
+
+Interfaces provide the blueprint for data structures used throughout the application, particularly for database documents and complex payloads.
+
+* **Naming Convention:** Interfaces are typically prefixed with a capital `I` (e.g., `ITenant`, `IETLContact`, `ICustomField`) to distinguish them from classes and variables.
+* **Usage:** They are used to define the shape of MongoDB documents and to provide type safety for objects passed between different utilities and services.
+* **Extension:** Interfaces for models often extend `mongoose.Document` when used in the Model layer to ensure compatibility with MongoDB's internal properties like `_id`.
+
+### 3. Service Layer Standards
+
+The Service layer is where the core business logic resides.
+
+* **Dependency Injection:** Services are decorated with `@Service()` and managed by `typedi`.
+* **Constructor Injection:** Dependencies such as models (e.g., `tenantModel`) and loggers are injected into the constructor.
+* **Utility Access:** Services frequently retrieve utility instances (like `HelperService` or `AxiosService`) using `Container.get()` to perform common tasks.
+* **Isolation:** Services do not handle HTTP responses. They perform logic and return raw data or objects, which the route handlers then wrap in HTTP responses.
+
+### 4. Utility (Util) Standards
+
+Utilities are stateless helper services that provide reusable functions across the entire application.
+
+* **Purpose:** They handle generic tasks such as ID hashing/decoding (`helperService.decodeHash`), external API calls (`axiosService`), or environment-specific calculations.
+* **Registration:** Like services, utilities are often registered with the DI container so they can be easily shared across multiple services.
+* **Global Helpers:** The `HelperService` acts as a central hub for common formatting and extraction tasks, such as getting tokens from headers or converting time units.
+
+### 5. Model Layer Standards
+
+Models define the data schema and provide an interface to the MongoDB database.
+
+* **Location:** All database schemas are located in `src/models/`.
+* **Schema Definition:** They use Mongoose to define the structure, types, and default values for each collection (e.g., `businessType` defaulting to 'other').
+* **Export Pattern:** Every model file exports a Mongoose model that combines the custom interface with the Mongoose `Document` type:
+`export default mongoose.model<ITenant & mongoose.Document>('Tenant', Tenant);`
+* **Centralized Loading:** Models are explicitly loaded and registered into the Dependency Injection container during the application startup phase in the `loaders` sequence.
+
+Based on the architectural patterns established in your codebase, here is a complete sample CRUD implementation for a hypothetical **Book** resource. This example demonstrates the interaction between **Interfaces/DTOs**, **Models**, **Services**, and **Routes** while adhering to your project's standards for dependency injection and three-layer architecture.
+
+### 1. The Interface & DTO Layer (`src/interfaces/IBook.ts`)
+
+Standard: Define an interface for the database structure and separate classes for data transfer between layers.
+
+```typescript
+import { Document } from 'mongoose';
+
+// Database Interface
+export interface IBook {
+  _id: string;
+  title: string;
+  author: string;
+  isbn: string;
+  publishedYear: number;
+  tenantId: number;
+}
+
+// Payload for creating/updating
+export class BookUpdateBody {
+  title?: string;
+  author?: string;
+  isbn?: string;
+  publishedYear?: number;
+}
+
+// Standard Input DTO for Services
+export class BookInputDto {
+  bookId?: string;
+  tenantId: number;
+  payload?: BookUpdateBody;
+}
+
+```
+
+### 2. The Model Layer (`src/models/book.ts`)
+
+Standard: Use Mongoose schemas registered with a name that matches the dependency injector keys.
+
+```typescript
+import mongoose from 'mongoose';
+import { IBook } from '../interfaces/IBook';
+
+const BookSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true },
+    author: { type: String, required: true },
+    isbn: { type: String, unique: true },
+    publishedYear: { type: Number },
+    tenantId: { type: Number, required: true },
+  },
+  { timestamps: true }
+);
+
+export default mongoose.model<IBook & mongoose.Document>('Book', BookSchema);
+
+```
+
+### 3. The Service Layer (`src/services/book.ts`)
+
+Standard: Use `@Service()`, constructor injection for models/loggers, and `build...Dto` methods to isolate logic from Express.
+
+```typescript
+import { Service, Inject, Container } from 'typedi';
+import { IBook, BookInputDto, BookUpdateBody } from '../interfaces/IBook';
+import HelperService from '../utils/helpers';
+
+@Service()
+export default class BookService {
+  private helperService: HelperService;
+
+  constructor(
+    @Inject('bookModel') private bookModel: any, // Injected via loader
+    @Inject('logger') private logger: any
+  ) {
+    this.helperService = Container.get(HelperService);
+  }
+
+  /**
+   * Transforms raw request data into a typed DTO
+   */
+  public buildBookDto(req: any): BookInputDto {
+    const dto = new BookInputDto();
+    dto.tenantId = this.helperService.decodeHash(req.claims.tid);
+    dto.bookId = req.params.id;
+    
+    if (req.body) {
+      dto.payload = {
+        title: req.body.title,
+        author: req.body.author,
+        isbn: req.body.isbn,
+        publishedYear: req.body.publishedYear
+      };
+    }
+    return dto;
+  }
+
+  public async createBook(dto: BookInputDto): Promise<{ data: IBook }> {
+    this.logger.debug('Creating new book');
+    const book = await this.bookModel.create({
+      ...dto.payload,
+      tenantId: dto.tenantId
+    });
+    return { data: book.toObject() };
+  }
+
+  public async getBooks(tenantId: number): Promise<{ data: IBook[] }> {
+    const books = await this.bookModel.find({ tenantId });
+    return { data: books };
+  }
+
+  public async updateBook(dto: BookInputDto): Promise<{ data: IBook }> {
+    const book = await this.bookModel.findOneAndUpdate(
+      { _id: dto.bookId, tenantId: dto.tenantId },
+      { $set: dto.payload },
+      { new: true }
+    );
+    if (!book) throw new Error('Book not found');
+    return { data: book.toObject() };
+  }
+
+  public async deleteBook(dto: BookInputDto): Promise<{ success: boolean }> {
+    await this.bookModel.deleteOne({ _id: dto.bookId, tenantId: dto.tenantId });
+    return { success: true };
+  }
+}
+
+```
+
+### 4. The Route Layer (`src/api/routes/book.ts`)
+
+Standard: Attach routes to the Express router, retrieve services via `Container.get()`, and handle errors via `next(e)`.
+
+```typescript
+import { Router, Response, NextFunction } from 'express';
+import { Container } from 'typedi';
+import BookService from '../../services/book';
+import middlewares from '../middlewares';
+
+const route = Router();
+
+export default (app: Router) => {
+  app.use('/books', route);
+
+  const bookService = Container.get(BookService);
+  const logger: any = Container.get('logger');
+
+  // CREATE
+  route.post('/', middlewares.attachCurrentUser, async (req: any, res: Response, next: NextFunction) => {
+    try {
+      const dto = bookService.buildBookDto(req);
+      const { data } = await bookService.createBook(dto);
+      return res.status(201).json(data);
+    } catch (e) {
+      logger.error('🔥 error: %o', e);
+      return next(e);
+    }
+  });
+
+  // READ ALL
+  route.get('/', middlewares.attachCurrentUser, async (req: any, res: Response, next: NextFunction) => {
+    try {
+      const tenantId = Container.get(BookService).buildBookDto(req).tenantId;
+      const { data } = await bookService.getBooks(tenantId);
+      return res.status(200).json(data);
+    } catch (e) {
+      return next(e);
+    }
+  });
+
+  // UPDATE
+  route.put('/:id', middlewares.attachCurrentUser, async (req: any, res: Response, next: NextFunction) => {
+    try {
+      const dto = bookService.buildBookDto(req);
+      const { data } = await bookService.updateBook(dto);
+      return res.status(200).json(data);
+    } catch (e) {
+      return next(e);
+    }
+  });
+
+  // DELETE
+  route.delete('/:id', middlewares.attachCurrentUser, async (req: any, res: Response, next: NextFunction) => {
+    try {
+      const dto = bookService.buildBookDto(req);
+      await bookService.deleteBook(dto);
+      return res.status(204).send();
+    } catch (e) {
+      return next(e);
+    }
+  });
+};
+
+```
+
+### 5. Integration with Loaders
+
+To make the sample functional, register the model in your dependency injector:
+
+* **In `src/loaders/index.ts**`:
+```typescript
+import BookModel from '../models/book';
+
+// Inside the loader function:
+const bookModel = {
+  name: 'bookModel',
+  model: BookModel,
+};
+
+await dependencyInjectorLoader({
+  mongoConnection,
+  models: [..., bookModel], // Add to the models array
+});
+
+```

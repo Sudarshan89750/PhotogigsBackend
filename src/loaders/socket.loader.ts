@@ -13,7 +13,9 @@ export const loadSocket = (httpServer: HttpServer): SocketServer => {
   const io = new SocketServer(httpServer, {
     cors: {
       origin: config.isProduction
-        ? [config.frontendUrl]
+        ? config.corsOrigins.length > 0
+          ? config.corsOrigins
+          : [config.frontendUrl]
         : ['http://localhost:5173', 'http://localhost:3000'],
       credentials: true,
     },
@@ -79,21 +81,21 @@ export const loadSocket = (httpServer: HttpServer): SocketServer => {
       if (!user?.userId || !conversationId) return;
       const canAccess = await chatService.canAccessConversation(conversationId, user.userId);
       if (!canAccess) return;
-      socket.to(conversationId).emit('user_typing', { userId: user?.userId });
+      socket.to(conversationId).emit('user_typing', { userId: user?.userId, conversationId });
     });
 
     socket.on('stop_typing', async (conversationId: string) => {
       if (!user?.userId || !conversationId) return;
       const canAccess = await chatService.canAccessConversation(conversationId, user.userId);
       if (!canAccess) return;
-      socket.to(conversationId).emit('user_stop_typing', { userId: user?.userId });
+      socket.to(conversationId).emit('user_stop_typing', { userId: user?.userId, conversationId });
     });
 
     socket.on('mark_read', async (conversationId: string) => {
       if (!user?.userId || !conversationId) return;
       const canAccess = await chatService.canAccessConversation(conversationId, user.userId);
       if (!canAccess) return;
-      io.to(conversationId).emit('messages_read', { conversationId, userId: user?.userId });
+      io.to(conversationId).emit('messages_read', { conversationId, readBy: user?.userId, readAt: new Date().toISOString() });
     });
 
     // Heartbeat: prevent 'offline' status for active chat users
@@ -101,6 +103,43 @@ export const loadSocket = (httpServer: HttpServer): SocketServer => {
       if (user?.userId) {
         await redisService.sadd('presence:pending_sync', user.userId);
       }
+    });
+
+    // ─── WebRTC Call Signaling ───────────────────────────────────────────────
+    socket.on('call_request', async (data: { conversationId: string; calleeId: string; callType: 'audio' | 'video' }) => {
+      if (!user?.userId || !data.conversationId || !data.calleeId) return;
+      const canAccess = await chatService.canAccessConversation(data.conversationId, user.userId);
+      if (!canAccess) return;
+      
+      socket.to(data.calleeId).emit('incoming_call', {
+        callerId: user.userId,
+        callerName: user.firstName || user.email,
+        conversationId: data.conversationId,
+        callType: data.callType,
+      });
+    });
+
+    socket.on('call_accepted', async (data: { conversationId: string; callerId: string }) => {
+      if (!user?.userId || !data.conversationId) return;
+      socket.to(data.callerId).emit('call_accepted', { calleeId: user.userId });
+    });
+
+    socket.on('call_rejected', async (data: { conversationId: string; callerId: string; reason?: string }) => {
+      if (!user?.userId || !data.conversationId) return;
+      socket.to(data.callerId).emit('call_rejected', { calleeId: user.userId, reason: data.reason });
+    });
+
+    socket.on('call_ended', async (data: { conversationId: string; otherUserId: string }) => {
+      if (!user?.userId || !data.conversationId) return;
+      socket.to(data.otherUserId).emit('call_ended', { userId: user.userId });
+    });
+
+    socket.on('ice_candidate', async (data: { conversationId: string; targetUserId: string; candidate: any }) => {
+      if (!user?.userId || !data.conversationId || !data.targetUserId) return;
+      socket.to(data.targetUserId).emit('ice_candidate', {
+        fromUserId: user.userId,
+        candidate: data.candidate,
+      });
     });
 
     socket.on('disconnect', () => {

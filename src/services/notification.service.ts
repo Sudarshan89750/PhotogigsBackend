@@ -124,6 +124,48 @@ export class NotificationService {
     await this.notificationModel.deleteOne({ _id: notificationId, userId });
   }
 
+  async getSettings(userId: string): Promise<any> {
+    const { rows } = await this.db.query(
+      `SELECT * FROM notification_settings WHERE user_id = $1 LIMIT 1`,
+      [userId]
+    );
+
+    if (rows.length === 0) {
+      const defaults = {
+        jobProposals: true,
+        chatMessages: true,
+        followers: true,
+        likesComments: true,
+        payments: true,
+        promotions: true,
+        emailNotifications: true,
+        pushNotifications: true,
+      };
+      await this.db.query(
+        `INSERT INTO notification_settings (user_id, settings, created_at, updated_at)
+         VALUES ($1, $2, NOW(), NOW())`,
+        [userId, JSON.stringify(defaults)]
+      );
+      return defaults;
+    }
+
+    try {
+      return JSON.parse(rows[0].settings);
+    } catch {
+      return {};
+    }
+  }
+
+  async updateSettings(userId: string, settings: any): Promise<void> {
+    const settingsJson = JSON.stringify(settings);
+    await this.db.query(
+      `INSERT INTO notification_settings (user_id, settings, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET settings = $2, updated_at = NOW()`,
+      [userId, settingsJson]
+    );
+  }
+
   // FIX #7: Actually send FCM push using Firebase Admin SDK
   private async sendPush(userId: string, title: string, body: string): Promise<void> {
     const messaging = initFirebase();

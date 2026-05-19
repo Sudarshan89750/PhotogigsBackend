@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { JobService } from '../../services/job.service';
 import { UserService } from '../../services/user.service';
 import { NotificationService } from '../../services/notification.service';
+import { parsePagination, buildMeta } from '../../utils/pagination';
 import { authenticate, requireApproved } from '../middlewares/auth.middleware';
 import { validate } from '../middlewares/validate.middleware';
 import { NotFoundError, ForbiddenError } from '../../utils/errors';
@@ -87,12 +88,63 @@ export default (app: Router): void => {
 
   router.get('/user/:userId', async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const { page, limit, skip } = parsePagination(req.query as Record<string, unknown>);
       const reviews = await reviewModel
         .find({ revieweeId: req.params.userId })
         .sort({ createdAt: -1 })
-        .limit(20)
+        .skip(skip)
+        .limit(limit + 1)
         .lean();
-      res.json({ success: true, data: reviews });
+      
+      const hasNextPage = reviews.length > limit;
+      if (hasNextPage) reviews.pop();
+      
+      res.json({ success: true, data: reviews, meta: buildMeta({ page, limit, hasNextPage }) });
+    } catch (e) { next(e); }
+  });
+
+  // Edit review
+  router.put('/:reviewId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { rating, comment } = req.body;
+      const review = await reviewModel.findOneAndUpdate(
+        { _id: req.params.reviewId, reviewerId: req.currentUser!.userId },
+        { $set: { rating, comment, updatedAt: new Date() } },
+        { new: true }
+      );
+      if (!review) throw new NotFoundError('Review not found or not yours');
+      
+      await userService.updateRating(review.revieweeId);
+      res.json({ success: true, data: review });
+    } catch (e) { next(e); }
+  });
+
+  // Delete review
+  router.delete('/:reviewId', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const review = await reviewModel.findOneAndDelete({ 
+        _id: req.params.reviewId, 
+        reviewerId: req.currentUser!.userId 
+      });
+      if (!review) throw new NotFoundError('Review not found or not yours');
+      
+      await userService.updateRating(review.revieweeId);
+      res.json({ success: true, message: 'Review deleted' });
+    } catch (e) { next(e); }
+  });
+
+  // Add review response (business owner reply)
+  router.post('/:reviewId/respond', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { response } = req.body;
+      const review = await reviewModel.findOneAndUpdate(
+        { _id: req.params.reviewId, revieweeId: req.currentUser!.userId },
+        { $set: { response, respondedAt: new Date() } },
+        { new: true }
+      );
+      if (!review) throw new NotFoundError('Review not found or not yours');
+      
+      res.json({ success: true, data: review });
     } catch (e) { next(e); }
   });
 };

@@ -105,12 +105,17 @@ export class ChatService {
     const enrichedData = data.map((c: any) => {
       const otherId = c.participants.find((p: string) => p !== userId);
       const other = userMap.get(otherId);
+      const isOnline = other?.last_active_at
+        ? new Date(other.last_active_at).getTime() > Date.now() - 15 * 60 * 1000
+        : false;
       return {
         ...c,
         otherParticipantName: other ? `${other.first_name} ${other.last_name}` : 'User',
         otherParticipantAvatar: other?.avatar_url,
         otherParticipantCity: other?.city,
-        otherParticipantStatus: other?.status || 'active',
+        otherParticipantStatus: other?.availability_status || 'unavailable',
+        otherParticipantLastActiveAt: other?.last_active_at || null,
+        isOtherOnline: isOnline,
       };
     });
 
@@ -127,30 +132,33 @@ export class ChatService {
     });
     if (!conversation) throw new ForbiddenError('Access denied');
 
-    // ONLY return messages that have not been delivered/acknowledged yet
-    // This turns the server into a relay for offline devices
+    const { page, limit, skip } = parsePagination(query);
+
     const data = await this.messageModel
-        .find({ conversationId, isDelivered: { $ne: true } })
-        .sort({ createdAt: 1 })
+        .find({ conversationId })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit + 1)
         .lean();
 
-    return { 
-      data, 
-      meta: buildMeta({ page: 1, limit: data.length, hasNextPage: false }) 
+    const hasNextPage = data.length > limit;
+    if (hasNextPage) data.pop();
+
+    const messages = data.reverse();
+
+    return {
+      data: messages,
+      meta: buildMeta({ page, limit, hasNextPage }),
     };
   }
 
   async acknowledgeReceipt(conversationId: string, userId: string, messageIds: string[]) {
     this.logger.info(`ACK received from ${userId} for ${messageIds.length} messages in ${conversationId}`);
-    
-    // Once acknowledged by a recipient, we can delete it from our server relay
-    // In a production environment with multiple devices per user, we would track individual delivery status
-    // For PhotoGigs 1:1 chat, simple deletion after ACK is sufficient for the "not on our server" requirement
-    await this.messageModel.deleteMany({
-      _id: { $in: messageIds },
-      conversationId,
-      senderId: { $ne: userId } // Ensure we don't delete messages the user themselves sent until synced on their other devices (if any)
-    });
+
+    await this.messageModel.updateMany(
+      { _id: { $in: messageIds }, conversationId, senderId: { $ne: userId } },
+      { $set: { isDelivered: true } }
+    );
 
     return { success: true };
   }
@@ -210,5 +218,33 @@ export class ChatService {
     }
 
     return { modifiedCount: result.modifiedCount };
+  }
+
+  async sendMessageRequest(fromUserId: string, toUserId: string) {
+    // Create notification for the recipient
+    const notificationModel = Container.get<any>('notificationModel');
+    await notificationModel.create({
+      userId: toUserId,
+      type: 'message_request',
+      title: 'New Message Request',
+      body: 'Someone wants to message you',
+      referenceId: fromUserId,
+      referenceType: 'user',
+    });
+  }
+
+  async respondToMessageRequest(requestId: string, userId: string, action: 'accept' | 'decline') {
+    if (action === 'accept') {
+      // Create conversation between users
+      const existing = await this.conversationModel.findOne({
+        participants: { $all: [requestId, userId] },
+      });
+      if (!existing) {
+        await this.conversationModel.create({
+          participants: [requestId, userId],
+          lastMessageAt: new Date(),
+        });
+      }
+    }
   }
 }

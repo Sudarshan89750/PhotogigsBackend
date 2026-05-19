@@ -57,6 +57,25 @@ export default (app: Router): void => {
 
       logger.info('PhonePe webhook received', { merchantTransactionId, state });
 
+      // Idempotency check - skip if already processed
+      const processedDb = Container.get<any>('pgPool');
+      const { rows: processed } = await processedDb.query(
+        `SELECT id FROM webhook_events WHERE event_id = $1 LIMIT 1`,
+        [merchantTransactionId]
+      ).catch(() => ({ rows: [] }));
+      
+      if (processed.length > 0) {
+        logger.info('PhonePe webhook: already processed, skipping', { merchantTransactionId });
+        res.json({ received: true, skipped: true });
+        return;
+      }
+
+      // Record event first for replay protection
+      await processedDb.query(
+        `INSERT INTO webhook_events (event_id, event_type, payload, created_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT DO NOTHING`,
+        [merchantTransactionId, state, JSON.stringify(decoded)]
+      ).catch(() => {});
+
       // FIX: Actively resolve payment state — the webhook IS the source of truth.
       if (state === 'COMPLETED' && merchantTransactionId) {
         await resolvePayment(merchantTransactionId, subSvc).catch(err =>
@@ -64,9 +83,13 @@ export default (app: Router): void => {
         );
       } else if (state === 'FAILED' && merchantTransactionId) {
         logger.warn('PhonePe payment FAILED', { merchantTransactionId });
-        // Optionally: mark the draft job/order as payment_failed so the UI can prompt retry
         await markPaymentFailed(merchantTransactionId).catch(err =>
           logger.error('Webhook failure marking failed', { merchantTransactionId, err })
+        );
+      } else if (state === 'CANCELLED' && merchantTransactionId) {
+        logger.warn('PhonePe payment CANCELLED', { merchantTransactionId });
+        await markPaymentCancelled(merchantTransactionId).catch(err =>
+          logger.error('Webhook cancellation marking failed', { merchantTransactionId, err })
         );
       }
 
@@ -77,7 +100,7 @@ export default (app: Router): void => {
 };
 
 /**
- * Resolves a completed payment against PostgreSQL for Subscriptions and Addons.
+ * Resolves a completed payment against PostgreSQL for Subscriptions, Addons, Jobs, and Orders.
  */
 async function resolvePayment(merchantTransactionId: string, subSvc: any): Promise<void> {
   if (merchantTransactionId.startsWith('SUB_')) {
@@ -92,6 +115,31 @@ async function resolvePayment(merchantTransactionId: string, subSvc: any): Promi
     return;
   }
 
+  if (merchantTransactionId.startsWith('JOB_')) {
+    const db = Container.get<any>('pgPool');
+    await db.query(
+      `UPDATE job_payments SET status = 'completed', paid_at = NOW() WHERE transaction_id = $1 AND status = 'pending'`,
+      [merchantTransactionId]
+    );
+    const jobId = merchantTransactionId.replace('JOB_', '');
+    await db.query(
+      `UPDATE jobs SET payment_status = 'paid' WHERE _id = $1`,
+      [jobId]
+    );
+    logger.info('Webhook: Job payment processed', { merchantTransactionId });
+    return;
+  }
+
+  if (merchantTransactionId.startsWith('ORDER_')) {
+    const db = Container.get<any>('pgPool');
+    await db.query(
+      `UPDATE marketplace_orders SET payment_status = 'paid', status = 'confirmed', paid_at = NOW() WHERE phonepe_txn_id = $1 AND payment_status = 'pending'`,
+      [merchantTransactionId]
+    );
+    logger.info('Webhook: Order payment processed', { merchantTransactionId });
+    return;
+  }
+
   logger.warn('Webhook: Unknown transaction prefix', { merchantTransactionId });
 }
 
@@ -100,14 +148,46 @@ async function resolvePayment(merchantTransactionId: string, subSvc: any): Promi
  */
 async function markPaymentFailed(merchantTransactionId: string): Promise<void> {
   const db = Container.get<any>('pgPool');
-  
+
   if (merchantTransactionId.startsWith('SUB_')) {
     await db.query(`UPDATE subscriptions SET status = 'failed' WHERE phonepe_txn_id = $1 AND status = 'pending'`, [merchantTransactionId]);
     return;
   }
-  
+
   if (merchantTransactionId.startsWith('ADDON_')) {
     await db.query(`UPDATE addon_purchases SET status = 'failed' WHERE phonepe_txn_id = $1 AND status = 'pending'`, [merchantTransactionId]);
+    return;
+  }
+
+  if (merchantTransactionId.startsWith('JOB_')) {
+    await db.query(`UPDATE job_payments SET status = 'failed' WHERE transaction_id = $1 AND status = 'pending'`, [merchantTransactionId]);
+    return;
+  }
+
+  if (merchantTransactionId.startsWith('ORDER_')) {
+    await db.query(`UPDATE marketplace_orders SET payment_status = 'failed' WHERE phonepe_txn_id = $1 AND payment_status = 'pending'`, [merchantTransactionId]);
+    return;
+  }
+}
+
+/**
+ * Marks a cancelled payment.
+ */
+async function markPaymentCancelled(merchantTransactionId: string): Promise<void> {
+  const db = Container.get<any>('pgPool');
+
+  if (merchantTransactionId.startsWith('SUB_')) {
+    await db.query(`UPDATE subscriptions SET status = 'cancelled' WHERE phonepe_txn_id = $1 AND status = 'pending'`, [merchantTransactionId]);
+    return;
+  }
+
+  if (merchantTransactionId.startsWith('JOB_')) {
+    await db.query(`UPDATE job_payments SET status = 'cancelled' WHERE transaction_id = $1 AND status = 'pending'`, [merchantTransactionId]);
+    return;
+  }
+
+  if (merchantTransactionId.startsWith('ORDER_')) {
+    await db.query(`UPDATE marketplace_orders SET payment_status = 'cancelled', status = 'cancelled' WHERE phonepe_txn_id = $1 AND payment_status = 'pending'`, [merchantTransactionId]);
     return;
   }
 }

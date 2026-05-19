@@ -256,7 +256,126 @@ export class SubscriptionService {
       await this.db.query('ROLLBACK');
       throw e;
     }
+  }
 
-    return { success: true, message: `${quantity} addon credits granted to user` };
+  async adminGrantSubscription(adminUserId: string, targetUserId: string, planId: string, days: number = 30) {
+    const { rows: planRows } = await this.db.query(
+      `SELECT * FROM membership_plans WHERE id = $1`,
+      [planId]
+    );
+    if (!planRows[0]) throw new NotFoundError('Plan not found');
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + days);
+
+    await this.db.query('BEGIN');
+    try {
+      // Deactivate existing subscriptions
+      await this.db.query(
+        `UPDATE subscriptions SET status = 'cancelled' WHERE user_id = $1 AND status IN ('trialing', 'active')`,
+        [targetUserId]
+      );
+
+      // Create new subscription
+      const { rows: subRows } = await this.db.query(
+        `INSERT INTO subscriptions (user_id, plan_id, status, expires_at, phonepe_txn_id)
+         VALUES ($1, $2, 'active', $3, 'ADMIN_GRANT')
+         RETURNING id`,
+        [targetUserId, planId, expiresAt]
+      );
+
+      // Update user membership tier
+      const tier = planRows[0].tier || 'pro';
+      await this.db.query(
+        `UPDATE users SET membership_tier = $1 WHERE id = $2`,
+        [tier, targetUserId]
+      );
+
+      // Audit log
+      await this.db.query(
+        `INSERT INTO admin_audit_logs (admin_user_id, action, target_user_id, details) VALUES ($1, 'grant_subscription', $2, $3)`,
+        [adminUserId, targetUserId, JSON.stringify({ planId, days, tier })]
+      );
+
+      await this.notif.create({
+        userId: targetUserId,
+        type: 'admin_subscription_granted',
+        title: 'Subscription Granted',
+        body: `An administrator has granted you ${planRows[0].name} (${days} days).`,
+        referenceId: subRows[0].id,
+        referenceType: 'subscription',
+      });
+
+      await this.db.query('COMMIT');
+      return { success: true, message: `Subscription granted for ${days} days` };
+    } catch (e) {
+      await this.db.query('ROLLBACK');
+      throw e;
+    }
+  }
+
+  async adminSetQuota(adminUserId: string, targetUserId: string, baseLimit: number, addonLimit: number) {
+    await this.db.query('BEGIN');
+    try {
+      await this.db.query(
+        `UPDATE users SET base_image_limit = $1, addon_image_limit = $2 WHERE id = $3`,
+        [baseLimit, addonLimit, targetUserId]
+      );
+
+      await this.db.query(
+        `INSERT INTO admin_audit_logs (admin_user_id, action, target_user_id, details) VALUES ($1, 'set_quota', $2, $3)`,
+        [adminUserId, targetUserId, JSON.stringify({ baseLimit, addonLimit })]
+      );
+
+      await this.notif.create({
+        userId: targetUserId,
+        type: 'admin_quota_updated',
+        title: 'Image Quota Updated',
+        body: `Your image quota has been updated: base ${baseLimit}, add-on ${addonLimit}.`,
+        referenceId: targetUserId,
+        referenceType: 'quota',
+      });
+
+      await this.db.query('COMMIT');
+      return { success: true, message: 'Quota updated successfully' };
+    } catch (e) {
+      await this.db.query('ROLLBACK');
+      throw e;
+    }
+  }
+
+  async adminCancelUserSubscription(adminUserId: string, targetUserId: string) {
+    await this.db.query('BEGIN');
+    try {
+      await this.db.query(
+        `UPDATE subscriptions SET status = 'cancelled' WHERE user_id = $1 AND status IN ('trialing', 'active')`,
+        [targetUserId]
+      );
+
+      await this.db.query(
+        `UPDATE users SET membership_tier = 'free' WHERE id = $1`,
+        [targetUserId]
+      );
+
+      await this.db.query(
+        `INSERT INTO admin_audit_logs (admin_user_id, action, target_user_id, details) VALUES ($1, 'cancel_subscription', $2, $3)`,
+        [adminUserId, targetUserId, JSON.stringify({})]
+      );
+
+      await this.notif.create({
+        userId: targetUserId,
+        type: 'admin_subscription_cancelled',
+        title: 'Subscription Cancelled',
+        body: 'An administrator has cancelled your subscription.',
+        referenceId: targetUserId,
+        referenceType: 'subscription',
+      });
+
+      await this.db.query('COMMIT');
+      return { success: true, message: 'Subscription cancelled' };
+    } catch (e) {
+      await this.db.query('ROLLBACK');
+      throw e;
+    }
   }
 }

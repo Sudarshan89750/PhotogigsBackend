@@ -46,4 +46,19 @@ export default (app: Router): void => {
       res.json({ success: true, message: 'Deleted' });
     } catch (e) { next(e); }
   });
+
+  // Notification settings/preferences
+  router.get('/settings', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const settings = await svc.getSettings(req.currentUser!.userId);
+      res.json({ success: true, data: settings });
+    } catch (e) { next(e); }
+  });
+
+  router.put('/settings', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await svc.updateSettings(req.currentUser!.userId, req.body);
+      res.json({ success: true, message: 'Settings updated' });
+    } catch (e) { next(e); }
+  });
 };

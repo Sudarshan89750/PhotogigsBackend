@@ -88,6 +88,34 @@ export class CommunityService {
     await post.deleteOne();
   }
 
+  async updatePost(postId: string, authorId: string, updates: {
+    content?: string;
+    hashtags?: string[];
+    city?: string;
+    state?: string;
+    country?: string;
+    media?: string[];
+  }) {
+    const post = await this.postModel.findOne({ _id: postId, authorId });
+    if (!post) throw new ForbiddenError('Post not found or access denied');
+
+    const updateFields: any = {};
+    if (updates.content !== undefined) updateFields.content = updates.content;
+    if (updates.city !== undefined) updateFields.city = updates.city;
+    if (updates.state !== undefined) updateFields.state = updates.state;
+    if (updates.country !== undefined) updateFields.country = updates.country;
+    if (updates.media !== undefined) updateFields.media = updates.media;
+    if (updates.hashtags !== undefined) updateFields.hashtags = updates.hashtags;
+
+    const updated = await this.postModel.findByIdAndUpdate(
+      postId,
+      { $set: { ...updateFields, updatedAt: new Date() } },
+      { new: true }
+    );
+
+    return updated;
+  }
+
   // ─── Likes ────────────────────────────────────────────────────────────────
 
   async togglePostLike(postId: string, userId: string): Promise<{ liked: boolean }> {
@@ -185,6 +213,51 @@ export class CommunityService {
     await this.postModel.findByIdAndUpdate(comment.postId, { $inc: { commentsCount: -1 } });
   }
 
+  async updateComment(commentId: string, authorId: string, content: string) {
+    const comment = await this.commentModel.findOneAndUpdate(
+      { _id: commentId, authorId },
+      { $set: { content, updatedAt: new Date() } },
+      { new: true }
+    );
+    if (!comment) throw new ForbiddenError('Comment not found or access denied');
+    return comment;
+  }
+
+  async getCommentReplies(commentId: string, query: Record<string, unknown>) {
+    const { page, limit, skip } = parsePagination(query);
+    const data = await this.commentModel
+      .find({ parentCommentId: commentId })
+      .sort({ createdAt: 1 })
+      .skip(skip)
+      .limit(limit + 1)
+      .lean();
+
+    const hasNextPage = data.length > limit;
+    if (hasNextPage) data.pop();
+
+    return {
+      data,
+      meta: buildMeta({ page, limit, hasNextPage }),
+    };
+  }
+
+  async getPostWithComments(postId: string, viewerId?: string) {
+    const post = await this.postModel.findById(postId).lean();
+    if (!post) throw new NotFoundError('Post not found');
+
+    const comments = await this.commentModel
+      .find({ postId, parentCommentId: { $exists: false } })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+
+    return {
+      ...post,
+      comments,
+      commentCount: post.commentsCount,
+    };
+  }
+
   async toggleCommentLike(
     commentId: string,
     userId: string
@@ -228,6 +301,14 @@ export class CommunityService {
     this.logger.info('Post shared', { postId, userId, sharedTo });
   }
 
+  getShareableLink(postId: string): { inApp: string; external: string } {
+    const baseUrl = process.env.FRONTEND_URL || 'https://photogigs.com';
+    return {
+      inApp: `photogigs://post/${postId}`,
+      external: `${baseUrl}/post/${postId}`,
+    };
+  }
+
   // ─── Follow ───────────────────────────────────────────────────────────────
 
   async toggleFollow(
@@ -259,34 +340,46 @@ export class CommunityService {
 
   async getFollowers(userId: string, query: Record<string, unknown>) {
     const { page, limit, skip } = parsePagination(query);
-    const data = await this.followModel
-      .find({ followingId: userId })
-      .skip(skip)
-      .limit(limit + 1)
-      .lean();
+    const db = Container.get<any>('pgPool');
+    
+    const { rows } = await db.query(
+      `SELECT u.id, u.first_name, u.last_name, u.avatar_url, u.bio, u.skills, u.average_rating, u.city, u.availability_status
+       FROM follows f
+       JOIN users u ON u.id = f.follower_id
+       WHERE f.following_id = $1
+       ORDER BY f.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit + 1, skip]
+    );
 
-    const hasNextPage = data.length > limit;
-    if (hasNextPage) data.pop();
+    const hasNextPage = rows.length > limit;
+    if (hasNextPage) rows.pop();
 
     return { 
-      data, 
+      data: rows, 
       meta: buildMeta({ page, limit, hasNextPage }) 
     };
   }
 
   async getFollowing(userId: string, query: Record<string, unknown>) {
     const { page, limit, skip } = parsePagination(query);
-    const data = await this.followModel
-      .find({ followerId: userId })
-      .skip(skip)
-      .limit(limit + 1)
-      .lean();
+    const db = Container.get<any>('pgPool');
+    
+    const { rows } = await db.query(
+      `SELECT u.id, u.first_name, u.last_name, u.avatar_url, u.bio, u.skills, u.average_rating, u.city, u.availability_status
+       FROM follows f
+       JOIN users u ON u.id = f.following_id
+       WHERE f.follower_id = $1
+       ORDER BY f.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit + 1, skip]
+    );
 
-    const hasNextPage = data.length > limit;
-    if (hasNextPage) data.pop();
+    const hasNextPage = rows.length > limit;
+    if (hasNextPage) rows.pop();
 
     return { 
-      data, 
+      data: rows, 
       meta: buildMeta({ page, limit, hasNextPage }) 
     };
   }
@@ -318,7 +411,29 @@ export class CommunityService {
       viewerState = { liked: !!liked, saved: !!saved };
     }
 
-    return { ...post, viewerState };
+    let authorData = null;
+    if (post.authorId) {
+      const { rows } = await this.db.query(
+        `SELECT id, first_name, last_name, avatar_url, bio, skills, average_rating, city
+         FROM users WHERE id = $1 AND status = 'approved'`,
+        [post.authorId]
+      );
+      if (rows[0]) {
+        authorData = {
+          _id: rows[0].id,
+          id: rows[0].id,
+          firstName: rows[0].first_name,
+          lastName: rows[0].last_name,
+          avatarUrl: rows[0].avatar_url,
+          bio: rows[0].bio,
+          skills: rows[0].skills,
+          averageRating: rows[0].average_rating,
+          city: rows[0].city,
+        };
+      }
+    }
+
+    return { ...post.toObject ? post.toObject() : post, viewerState, author: authorData };
   }
 
   private async enqueueTrending(postId: string): Promise<void> {

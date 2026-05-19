@@ -3,7 +3,7 @@ import { Container } from 'typedi';
 import { Pool } from 'pg';
 import { buildGeoNearFilter } from '../../utils/geo';
 import { parsePagination, buildMeta } from '../../utils/pagination';
-import { optionalAuthenticate } from '../middlewares/auth.middleware';
+import { optionalAuthenticate, authenticate } from '../middlewares/auth.middleware';
 import { searchLimiter } from '../middlewares/rate-limit.middleware';
 
 const router = Router();
@@ -31,6 +31,10 @@ export default (app: Router): void => {
       if (req.query.minRating) {
         conditions.push(`average_rating >= $${idx++}`);
         values.push(Number(req.query.minRating));
+      }
+      if (req.query.availability) {
+        conditions.push(`availability_status = $${idx++}`);
+        values.push(req.query.availability);
       }
       if (req.query.skills && typeof req.query.skills === 'string') {
         const skillList = req.query.skills
@@ -97,7 +101,7 @@ export default (app: Router): void => {
 
       const { rows } = await db.query(
         `SELECT id, first_name, last_name, city, state, country, avatar_url,
-                bio, skills, hourly_rate, average_rating, total_reviews, latitude, longitude
+                bio, skills, hourly_rate, average_rating, total_reviews, latitude, longitude, availability_status
                 ${distanceCol}
          FROM users WHERE ${where}
          ORDER BY ${orderBy}
@@ -159,6 +163,157 @@ export default (app: Router): void => {
       if (hasNextPage) data.pop();
 
       res.json({ success: true, data, meta: buildMeta({ page, limit, hasNextPage }) });
+    } catch (e) { next(e); }
+  });
+
+  // Search users (for autocomplete and user discovery)
+  router.get('/users', searchLimiter, optionalAuthenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const db = Container.get<Pool>('pgPool');
+      const { page, limit, skip } = parsePagination(req.query as Record<string, unknown>);
+      const q = (req.query.q as string || '').trim();
+
+      if (!q || q.length < 2) {
+        res.json({ success: true, data: [], meta: buildMeta({ page, limit, hasNextPage: false }) });
+        return;
+      }
+
+      const { rows } = await db.query(
+        `SELECT id, first_name, last_name, avatar_url, bio, skills, average_rating, city
+         FROM users
+         WHERE status IN ('approved', 'pending_otp')
+           AND (first_name ILIKE $1 OR last_name ILIKE $1 OR CONCAT(first_name, ' ', last_name) ILIKE $1)
+         ORDER BY average_rating DESC NULLS LAST
+         LIMIT $2 OFFSET $3`,
+        [`%${q}%`, limit + 1, skip]
+      );
+
+      const hasNextPage = rows.length > limit;
+      if (hasNextPage) rows.pop();
+
+      res.json({ success: true, data: rows, meta: buildMeta({ page, limit, hasNextPage }) });
+    } catch (e) { next(e); }
+  });
+
+  router.get('/map/photographers', searchLimiter, optionalAuthenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const db = Container.get<Pool>('pgPool');
+      const limit = Math.min(Number(req.query.limit ?? 200), 200);
+
+      let query = `
+        SELECT id, first_name, last_name, avatar_url, bio, skills, average_rating,
+               hourly_rate, city, state, latitude, longitude, availability_status
+        FROM users
+        WHERE status = 'approved'
+          AND latitude IS NOT NULL
+          AND longitude IS NOT NULL
+      `;
+      const params: any[] = [];
+      let idx = 1;
+
+      if (req.query.availability) {
+        params.push(req.query.availability);
+        query += ` AND availability_status = $${idx++}`;
+      }
+
+      query += ` ORDER BY average_rating DESC NULLS LAST LIMIT $${idx} OFFSET $${idx + 1}`;
+      params.push(limit, 0);
+
+      const { rows } = await db.query(query, params);
+
+      res.json({ success: true, data: rows });
+    } catch (e) { next(e); }
+  });
+
+  // Global/Universal search - searches across all content types
+  router.get('/', searchLimiter, optionalAuthenticate, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const db = Container.get<Pool>('pgPool');
+      const jobModel = Container.get<any>('jobModel');
+      const communityModel = Container.get<any>('postModel');
+      const q = (req.query.q as string || '').trim();
+      const type = req.query.type as string || 'all'; // all, users, jobs, posts, listings
+      const limit = Math.min(20, Number(req.query.limit) || 10);
+
+      if (!q || q.length < 2) {
+        res.json({ success: true, data: { users: [], jobs: [], posts: [], listings: [] }, meta: { count: 0 } });
+        return;
+      }
+
+      const results: any = { users: [], jobs: [], posts: [], listings: [] };
+      const qRegex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+
+      // Search users
+      if (type === 'all' || type === 'users') {
+        const { rows: users } = await db.query(
+          `SELECT id, first_name, last_name, avatar_url, bio, average_rating, city
+           FROM users 
+           WHERE status IN ('approved', 'pending_otp')
+             AND (first_name ILIKE $1 OR last_name ILIKE $1 OR CONCAT(first_name, ' ', last_name) ILIKE $1)
+           LIMIT $2`,
+          [`%${q}%`, limit]
+        );
+        results.users = users;
+      }
+
+      // Search jobs
+      if (type === 'all' || type === 'jobs') {
+        const jobs = await jobModel
+          .find({ 
+            status: 'open',
+            $or: [
+              { title: { $regex: qRegex } },
+              { description: { $regex: qRegex } },
+              { category: { $regex: qRegex } },
+            ]
+          })
+          .select('_id title category budget city status createdAt')
+          .limit(limit)
+          .lean();
+        results.jobs = jobs;
+      }
+
+      // Search posts
+      if (type === 'all' || type === 'posts') {
+        const posts = await communityModel
+          .find({
+            $or: [
+              { content: { $regex: qRegex } },
+              { hashtags: { $regex: qRegex } },
+            ]
+          })
+          .select('_id content authorId images likesCount createdAt')
+          .limit(limit)
+          .lean();
+        results.posts = posts;
+      }
+
+      // Search marketplace listings
+      if (type === 'all' || type === 'listings') {
+        const listingModel = Container.get<any>('listingModel');
+        const listings = await listingModel
+          .find({
+            status: 'active',
+            $or: [
+              { title: { $regex: qRegex } },
+              { description: { $regex: qRegex } },
+              { category: { $regex: qRegex } },
+            ]
+          })
+          .select('_id title price images category listingType')
+          .limit(limit)
+          .lean();
+        results.listings = listings;
+      }
+
+      res.json({ 
+        success: true, 
+        data: results, 
+        meta: { 
+          count: results.users.length + results.jobs.length + results.posts.length + results.listings.length,
+          query: q 
+        }
+      });
     } catch (e) { next(e); }
   });
 };
