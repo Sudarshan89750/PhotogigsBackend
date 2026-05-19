@@ -52,42 +52,38 @@ const shutdown = async (signal: string): Promise<void> => {
 
 // --- Bootstrap ───────────────────────────────────────────────────────────────
 const bootstrap = async (): Promise<void> => {
-  // 1. Build Express app FIRST — server must be listening before Railway healthcheck fires
+  // 1. Initialize DBs first — routes depend on DI container (pgPool etc.)
+  // This keeps local dev working. Server starts after deps load (~2-5s).
+  await initializeDependencies();
+
+  // 2. Build Express app (routes need pgPool from step 1)
   const app = loadExpress();
   const httpServer = http.createServer(app);
 
-  // 2. Attach Socket.io (with Redis adapter)
+  // 3. Attach Socket.io
   loadSocket(httpServer);
 
-  // 3. Start listening immediately — Railway healthcheck fires at ~30s mark
+  // 4. Start listening
   const port = parseInt(process.env.PORT || '3000', 10);
   httpServer.listen(port, '0.0.0.0', () => {
     logger.warn('PhotoGigs API running on port ' + port + ' [' + config.env + ']');
   });
 
-  // 4. Initialize DBs after server is up — /health returns 200 even if DBs are slow
-  initializeDependencies()
-    .then(() => {
-      logger.info('All dependencies initialized');
+  // 5. Start BullMQ workers after server is up
+  let stopWorkers = async () => {};
+  if (config.redis.enabled) {
+    const postModel = Container.get<any>('postModel');
+    const notificationModel = Container.get<any>('notificationModel');
+    const marketplaceOrderModel = Container.get<any>('marketplaceOrderModel');
+    stopWorkers = startWorkers({ postModel, notificationModel, marketplaceOrderModel });
 
-      let stopWorkers = async () => {};
-      if (config.redis.enabled) {
-        const postModel = Container.get<any>('postModel');
-        const notificationModel = Container.get<any>('notificationModel');
-        const marketplaceOrderModel = Container.get<any>('marketplaceOrderModel');
-        stopWorkers = startWorkers({ postModel, notificationModel, marketplaceOrderModel });
+    presenceQueue.add('sync', {}, {
+      repeat: { every: 5 * 60 * 1000 },
+      jobId: 'presence_sync_default',
+    }).catch((err: any) => logger.error('Failed to schedule periodic job', { err: err.message }));
+  }
 
-        presenceQueue.add('sync', {}, {
-          repeat: { every: 5 * 60 * 1000 },
-          jobId: 'presence_sync_default',
-        }).catch((err: any) => logger.error('Failed to schedule periodic job', { err: err.message }));
-      }
-
-      (global as any).__stopWorkers = stopWorkers;
-    })
-    .catch((err) => {
-      logger.error('Dependency initialization failed — server running in degraded mode', { err: err.message });
-    });
+  (global as any).__stopWorkers = stopWorkers;
 };
 
 // --- Signal handlers ─────────────────────────────────────────────────────────

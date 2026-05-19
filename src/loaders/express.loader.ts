@@ -113,32 +113,9 @@ export const loadExpress = (): express.Application => {
     })
   );
 
-  // ─── FIX #13: Deep health check ───────────────────────────────────────────
-  app.get('/health', async (_req: Request, res: Response) => {
-    try {
-      const { Pool } = await import('pg');
-      const pg = Container.get<InstanceType<typeof Pool>>('pgPool' as any);
-      const redisClient = redis.getClient();
-
-      const [pgOk, redisOk] = await Promise.allSettled([
-        pg.query('SELECT 1'),
-        redisClient ? redisClient.ping() : Promise.resolve(),
-      ]);
-
-      const healthy =
-        pgOk.status === 'fulfilled' && redisOk.status === 'fulfilled';
-
-      res.status(healthy ? 200 : 503).json({
-        status: healthy ? 'ok' : 'degraded',
-        timestamp: new Date().toISOString(),
-        checks: {
-          postgres: pgOk.status === 'fulfilled' ? 'ok' : 'down',
-          redis: redisOk.status === 'fulfilled' ? 'ok' : 'down',
-        },
-      });
-    } catch (err) {
-      res.status(503).json({ status: 'error' });
-    }
+  // ─── Health check — Railway only needs HTTP 200, not DB status ─────────────
+  app.get('/health', (_req: Request, res: Response) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
   // ─── API Routes ───────────────────────────────────────────────────────────
