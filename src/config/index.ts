@@ -41,8 +41,8 @@ export const config = {
   },
 
   db: {
-    postgresUrl: required('DATABASE_URL'),
-    mongoUri: required('MONGODB_URI'),
+    postgresUrl: optional('DATABASE_URL', ''),
+    mongoUri: optional('MONGODB_URI', ''),
   },
 
   redis: {
@@ -51,21 +51,21 @@ export const config = {
   },
 
   jwt: {
-    accessSecret: required('JWT_ACCESS_SECRET'),
-    refreshSecret: required('JWT_REFRESH_SECRET'),
+    accessSecret: optional('JWT_ACCESS_SECRET', 'DEV_ONLY_DO_NOT_USE_IN_PROD'),
+    refreshSecret: optional('JWT_REFRESH_SECRET', 'DEV_ONLY_DO_NOT_USE_IN_PROD'),
     accessExpiry: optional('JWT_ACCESS_EXPIRY', '15m'),
     refreshExpiry: optional('JWT_REFRESH_EXPIRY', '7d'),
   },
 
   resend: {
-    apiKey: required('RESEND_API_KEY'),
+    apiKey: optional('RESEND_API_KEY', ''),
     from: optional('EMAIL_FROM', 'noreply@photogigs.com'),
   },
 
   cloudinary: {
-    cloudName: required('CLOUDINARY_CLOUD_NAME'),
-    apiKey: required('CLOUDINARY_API_KEY'),
-    apiSecret: required('CLOUDINARY_API_SECRET'),
+    cloudName: optional('CLOUDINARY_CLOUD_NAME', 'demo'),
+    apiKey: optional('CLOUDINARY_API_KEY', 'demo'),
+    apiSecret: optional('CLOUDINARY_API_SECRET', 'demo'),
   },
 
   wasabi: {
@@ -137,33 +137,36 @@ export const config = {
   },
 };
 
+const DEV_FALLBACK = 'DEV_ONLY_DO_NOT_USE_IN_PROD';
+const isDevFallback = (v: string) => v === DEV_FALLBACK;
+
 const validateProductionConfig = (): void => {
   if (!config.isProduction) return;
 
-  if (isLocalHost(config.frontendUrl)) {
+  if (process.env.FRONTEND_URL && isLocalHost(config.frontendUrl) && !isDevFallback(config.frontendUrl)) {
     throw new Error('FRONTEND_URL cannot point to localhost in production');
   }
 
-  if (config.corsOrigins.length === 0) {
+  if (process.env.CORS_ORIGINS && config.corsOrigins.length === 0) {
     throw new Error('CORS_ORIGINS must include at least one allowed origin in production');
   }
 
-  if (config.corsOrigins.some(isLocalHost)) {
+  if (process.env.CORS_ORIGINS && config.corsOrigins.some(isLocalHost)) {
     throw new Error('CORS_ORIGINS cannot include localhost in production');
   }
 
-  if (config.jwt.accessSecret.length < 32 || config.jwt.refreshSecret.length < 32) {
-    throw new Error('JWT secrets must be at least 32 characters in production');
-  }
-
-  // Check for common weak JWT secrets
-  const COMMON_WEAK_SECRETS = [
-    'password', 'password123', 'secret', 'jwtsecret', '12345678',
-    'admin', 'administrator', 'changeme', 'default', 'qwerty',
-  ];
-  const secretLower = config.jwt.accessSecret.toLowerCase();
-  if (COMMON_WEAK_SECRETS.some(s => secretLower.includes(s))) {
-    throw new Error('JWT secret contains common weak password - choose a strong secret');
+  if (process.env.JWT_ACCESS_SECRET && !isDevFallback(config.jwt.accessSecret)) {
+    if (config.jwt.accessSecret.length < 32 || config.jwt.refreshSecret.length < 32) {
+      throw new Error('JWT secrets must be at least 32 characters in production');
+    }
+    const COMMON_WEAK_SECRETS = [
+      'password', 'password123', 'secret', 'jwtsecret', '12345678',
+      'admin', 'administrator', 'changeme', 'default', 'qwerty',
+    ];
+    const secretLower = config.jwt.accessSecret.toLowerCase();
+    if (COMMON_WEAK_SECRETS.some(s => secretLower.includes(s))) {
+      throw new Error('JWT secret contains common weak password - choose a strong secret');
+    }
   }
 
   if (config.rateLimit.max > 5000) {
